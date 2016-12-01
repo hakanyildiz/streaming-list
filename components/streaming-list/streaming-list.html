@@ -1,0 +1,313 @@
+<!--
+@license
+Copyright (c) 2015 The Polymer Project Authors. All rights reserved.
+This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+Code distributed by Google as part of the polymer project is also
+subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
+-->
+
+<link rel="import" href="../polymer/polymer.html">
+<link rel="import" href="../iron-ajax/iron-ajax.html">
+<link rel="import" href="../iron-flex-layout/iron-flex-layout-classes.html">
+<link rel="import" href="../paper-styles/paper-styles.html">
+<link rel="import" href="../paper-spinner/paper-spinner.html">
+<link rel="import" href="../event-infinite-scroll/event-infinite-scroll.html">
+<link rel="import" href="twitchtv-card.html">
+
+<!--
+A webcomponent written with Polymer to list Twitch and (in future) Youtube streams. You will be able to filter the results by a specific game and define priority for a selected language.
+
+Example:
+
+    <streaming-list lang="pt" game="Dota 2"></streaming-list>
+
+@demo demo/index.html
+@hero hero.svg
+-->
+
+<dom-module id="streaming-list">
+  <template>
+    <style>
+      :host {
+        display: block;
+        box-sizing: border-box;
+        @apply(--layout-vertical);
+      }
+
+      #streams {
+        @apply(--layout-wrap);
+      }
+
+      twitchtv-card {
+        margin: 16px;
+      }
+
+      paper-spinner {
+        margin: 16px auto;
+      }
+    </style>
+    <iron-ajax
+               id="ajax"
+               url="{{apiUrl}}"
+               headers='[[_concatHeaders(clientId)]]'
+               handle-as="json"
+               on-response="_onResponse"
+               on-request="_onRequest"
+               on-error="_onError"
+               debounce-duration="30">
+    </iron-ajax>
+    <div id="streams">
+      <template is="dom-repeat" items="[[response.streams]]">
+        <twitchtv-card data="[[item]]" width="[[width]]" on-loaded="_cardLoaded"></twitchtv-card>
+      </template>
+    </div>
+    <paper-spinner id="spinnerBottom" alt="Loading more streams" active></paper-spinner>
+    <event-infinite-scroll
+               id="scroll"
+               scrollOffset="60"
+               on-reach-bottom="_loadMore">
+    </event-infinite-scroll>
+  </template>
+
+  <script>
+    Polymer({
+      is: "streaming-list",
+
+      /**
+       * Fired when a request is sent.
+       *
+       * @event streaming-list-request
+       */
+
+      /**
+       * Fired when a response of a single card is received.
+       *
+       * @event streaming-list-response
+       */
+
+       /**
+        * Fired when all requested responses has been received and element is fully rendered.
+        *
+        * @event streaming-list-ready
+        */
+
+      /**
+       * Fired in request or response error.
+       *
+       * @event streaming-list-error
+       */
+
+      properties: {
+        /**
+         * `apiUrl` indicates the URL of twitch API to list streams
+         */
+        apiUrl: {
+          type: String,
+          notify: true,
+          value: "https://api.twitch.tv/kraken/streams"
+        },
+
+        /**
+         * `clientId` Required Twitch.tv Client ID (register yout app at https://www.twitch.tv/settings/connections)
+         */
+        clientId: String,
+
+        /**
+         * `limit` Used to define the number of itens on each page
+         */
+        limit: {
+          type: Number,
+          notify: true,
+          value: 10
+        },
+
+        /**
+         * `pages` Number of pages to maintain cached, can cause performance degradation
+         */
+        pages: {
+          type: Number,
+          value: 2
+        },
+
+        /**
+        * `width` If you define width (in pixels) the container layout will be changed to wrap and the card size will be fixed with the given width
+        */
+        width: {
+          type: Number,
+          notify: true,
+          value: null
+        },
+
+        /**
+         * `lang` Used to filter the language of the videos
+         */
+        lang: {
+          type: String,
+          notify: true,
+          value: "en"
+        },
+
+        /**
+         * `game` Used to filter videos from a specific game
+         */
+        game: {
+          type: String,
+          notify: true,
+          value: null
+        },
+
+        /**
+        * `response` Cached data retrieved from the server
+        */
+        response: {
+          type: Object,
+          value: function(){
+            return {streams: []};
+          },
+          notify: true
+        },
+
+        /**
+         * `currentPage` Current page
+         */
+        currentPage: {
+          type: Number,
+          readOnly: true,
+          notify: true,
+          value: 0
+        }
+      },
+
+      observers: [
+        'generateRequest(apiUrl, limit, lang, game, clientId)'
+      ],
+
+      listeners: {
+        'streaming-list-ready': '_afterReady'
+      },
+
+      ready: function() {
+        if(this.width) {
+          this.className = 'layout horizontal wrap';
+        }
+      },
+
+      _concatParams: function() {
+        return {
+          limit: this.limit,
+          language: this.lang,
+          game: this.game,
+          offset: (this.currentPage * this.limit) || 0
+        };
+      },
+
+      _concatHeaders: function(clientId) {
+        return {
+          'Client-ID': clientId
+        };
+      },
+
+      _onRequest: function(event) {
+        this.$.spinnerBottom.active = true;
+        this.fire('streaming-list-request', event);
+      },
+
+      _onResponse: function(event) {
+        //console.log(event.detail.response.streams);
+        var oldStreams = this.response.streams;
+
+        var response = event.detail.response;
+        //this.set('response.streams', response.streams);
+
+        // set old streams concated with new streams
+        this.set('response.streams', oldStreams.concat(response.streams));
+
+        this.fire('streaming-list-response', event.detail);
+      },
+
+      _onError: function(event) {
+        this.fire('streaming-list-error', event.detail);
+      },
+
+      _loadMore: function(event) {
+        this.$.scroll.stopObserve();
+        this._scrollListening = false;
+
+        // currentPage is readOnly, all readOnly have _setProp method
+        this._setCurrentPage(this.currentPage + 1);
+        this.generateRequest();
+      },
+
+      /**
+       * Fires loaded event when all cards has been loaded after the request
+       * @param  Event event loaded event of each card
+       * @return null
+       */
+      _cardLoaded: function(event) {
+        this.doneCards = this.doneCards || [];
+        this.doneCards.push(event);
+        //console.log(this.doneCards.length, 'of', this.limit);
+
+        if(this.doneCards.length >= this.limit){
+          //console.log('all cards loaded');
+          //console.log(this.response.streams);
+
+          // remove old cards
+          this._removeOldCards();
+
+          // reset spinner
+          this.$.spinnerBottom.active = false;
+
+          this.fire('streaming-list-ready', this.doneCards);
+          this.doneCards = [];
+        }
+      },
+
+      _afterReady: function(event) {
+        // Listen for scroll event-infinite-scroll
+        if(!this._scrollListening) {
+          this.$.scroll.startObserve();
+          this._scrollListening = true;
+        }
+      },
+
+      _removeOldCards: function(event) {
+        /* Pending implementation */
+        /*
+        if(!this.pages) return;
+        if(this.response.streams.length > this.limit * this.pages) {
+          //this.splice('response.streams', 0, this.limit);
+
+          // Scroll to bottom - offset -1
+          //this._scrollUp();
+        }
+        //console.log(this.response.streams.length);
+        */
+      },
+
+      /**
+       * Scroll to middle of page
+       */
+      _scrollBottom: function() {
+        if (this.body) {
+          var top = document.body.scrollHeight,
+              left = window.pageX || document.documentElement.scrollLeft;
+          console.log('scrolling to', left, top);
+          window.scrollTo(left, top);
+        }
+      },
+
+      /**
+       * Performs an AJAX iron-ajax-request to the streaming server
+       * @returns {!IronRequestElement} Returns !IronRequestElement
+       */
+      generateRequest: function() {
+        this.$.ajax.params = this._concatParams();
+        //console.log(this.$.ajax.params);
+        return this.$.ajax.generateRequest();
+      }
+    });
+  </script>
+</dom-module>
